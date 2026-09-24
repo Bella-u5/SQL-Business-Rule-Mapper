@@ -1,0 +1,8 @@
+import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';import {spawn} from 'node:child_process';
+const listen=(server)=>new Promise(resolve=>server.listen(0,'127.0.0.1',()=>resolve(server.address().port)));
+test('model suggestions remain pending and use /v1/chat/completions',async()=>{
+ const upstream=http.createServer(async(req,res)=>{assert.equal(req.url,'/v1/chat/completions');let chunks=[];for await(const c of req)chunks.push(c);let data=JSON.parse(Buffer.concat(chunks).toString());assert.equal(data.model,'mock');res.setHeader('content-type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({suggestions:[{id:'r1',meaning:'待核对的业务解释',uncertain:false},{id:'invented',meaning:'不应展示'}]})}}]}))});
+ const upstreamPort=await listen(upstream),port=4187;const child=spawn(process.execPath,['server.js'],{cwd:new URL('..',import.meta.url),env:{...process.env,PORT:String(port),LLM_BASE_URL:`http://127.0.0.1:${upstreamPort}/v1`,LLM_API_KEY:'test-key',LLM_MODEL:'mock'},stdio:'ignore'});
+ try{let ready=false;for(let i=0;i<40;i++){try{let x=await fetch(`http://127.0.0.1:${port}/`);if(x.ok){ready=true;break}}catch{}await new Promise(r=>setTimeout(r,50))}assert.ok(ready,'app server did not start');let response=await fetch(`http://127.0.0.1:${port}/api/suggest`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({rules:[{id:'r1',field:'premium',kind:'SELECT 字段',condition:'',result:'p.premium'}]})});assert.equal(response.status,200);let data=await response.json();assert.deepEqual(data.suggestions,[{id:'r1',meaning:'待核对的业务解释',uncertain:true}]);}
+ finally{child.kill();await new Promise(r=>upstream.close(r))}
+});
